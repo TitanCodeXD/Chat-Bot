@@ -1,5 +1,8 @@
 # Importações necessárias para o streamlit, api do google, leitura em json, lottie e etc.
 import streamlit as st
+#Services
+from services.chat import create_chat, send_message
+from services.image import analyze_image
 import requests
 from PIL import Image
 import google.generativeai as genai
@@ -16,16 +19,20 @@ from io import BytesIO
 from streamlit_lottie import st_lottie #Import de arquivos lottie animados
 from dotenv import load_dotenv
 
+
 # Padrão da página como centralizado
 st.set_page_config(layout="centered")
 
 # Carregando arquivo .env (variáveis de ambiente) e pegando nossa KEY da API
 load_dotenv()
 
-API_KEY = os.getenv("API_KEY");
-genai.configure(api_key = API_KEY);
-model = genai.GenerativeModel('gemini-3.8-flash')
-chat = model.start_chat(history=[])
+
+################ Configuração antiga do Gemini removida. ####################
+################ A integração com o novo SDK será feita gradualmente. #######
+#API_KEY = os.getenv("API_KEY");
+#genai.configure(api_key = API_KEY);
+#model = genai.GenerativeModel('gemini-3.8-flash')
+#chat = client.chats.create(model=MODEL_NAME)
 
 messages = []
 image_messages = []
@@ -65,23 +72,35 @@ def update_chat_container():
 
         
 # Função para processar o envio de mensagem do chat
+
+# Função para processar o envio de mensagem do chat
 def process_chat_message(user_input):
     if user_input:
-        response = chat.send_message(user_input)
+        try:
+            response = send_message(
+                st.session_state.gemini_chat,
+                user_input
+            )
 
-        # Lingua selecionada
-        selected_language = st.session_state["selected_language"]
+            # Língua selecionada
+            selected_language = st.session_state["selected_language"]
 
-        if selected_language == "Português": 
-            pronome = "Você"
-        else:
-            pronome = "You"
-        st.session_state.messages.append((pronome, user_input))
-        st.session_state.messages.append(("Gemini", response.text))
-        update_chat_container()
-        st.rerun()
+            pronome = "Você" if selected_language == "Português" else "You"
+
+            st.session_state.messages.append((pronome, user_input))
+            st.session_state.messages.append(("Gemini", response))
+
+            update_chat_container()
+            st.rerun()
+
+        except Exception as error:
+            st.error(f"Erro ao enviar mensagem: {error}")
+
     else:
-        st.markdown('<span id="erro">Por favor, digite alguma coisa.</span>', unsafe_allow_html=True)
+        st.markdown(
+            '<span id="erro">Por favor, digite alguma coisa.</span>',
+            unsafe_allow_html=True
+        )
 
 # Função para alterar tamanho da fonte do site, útil para acessibilidade
 def set_font_size(font_size):
@@ -199,6 +218,12 @@ if selected_language == "Português":
 elif selected_language == "English":
         aba1, aba2, aba3, aba4, aba5 = st.tabs(['Chat Bot Geral','Image Review','PDFs Review', 'Audio Review', 'About']);
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "gemini_chat" not in st.session_state:
+    st.session_state.gemini_chat = create_chat()
+
 with aba1:
     if selected_language == "Português":
         st.write("### Chat Bot:")
@@ -206,9 +231,6 @@ with aba1:
         st.markdown('<p class = aviso>Aviso: Dependendo da pergunta, o bot pode acrescentar muito texto e não enviar a resposta. Seja pontual. Se o bot der algum erro, peça para ele resumir a resposta, deve funcionar.</p>', unsafe_allow_html=True);
 
         chat_container = st.container()
-
-        if 'messages' not in st.session_state:
-            st.session_state.messages = []
 
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -230,9 +252,6 @@ with aba1:
 
         chat_container = st.container()
 
-        if 'messages' not in st.session_state:
-            st.session_state.messages = []
-
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
             for user, message in st.session_state.messages:
@@ -251,83 +270,187 @@ with aba1:
 
 #Agora para a aba2, foi fundamental acessar a documentação do gemini, aqui precisamos alterar o modelo da IA, 
 #para que possamos conversar enviando imagens. De resto, repitimos o processo da aba1
-with aba2:  
- if selected_language == "Português":
-    st.write("### Análise de Imagens com IA")
-    st.write("📍 **Envie uma imagem!**: Envie uma imagem e pergunte o que quiser sobre ela para a IA!")
-    st.markdown("<p class = aviso >Aviso: A IA lê imagens de até 20MB.</p>", unsafe_allow_html=True);
 
-    model = genai.GenerativeModel('gemini-1.5-flash') ## para analisar as imagens, precisamos de outra versão do gemini
-    uploaded_file = st.file_uploader("Escolha uma imagem...", type=["jpg", "jpeg", "png"])
+with aba2:
+    if "image_messages" not in st.session_state:
+        st.session_state.image_messages = []
+
+    if selected_language == "Português":
+        st.write("### Análise de Imagens com IA")
+        st.write("📍 **Envie uma imagem!**: Envie uma imagem e pergunte o que quiser sobre ela para a IA!")
+        st.markdown(
+            '<p class="aviso">Aviso: A IA lê imagens de até 20MB.</p>',
+            unsafe_allow_html=True
+        )
+
+        upload_label = "Escolha uma imagem..."
+        image_caption = "Imagem Enviada"
+        initial_prompt = "Analise esta imagem"
+        initial_message = "Analise esta imagem:"
+        chat_placeholder = "Pergunte algo sobre a imagem..."
+        user_label = "Você"
+
+        st.caption(
+            "💡 A análise pode levar alguns segundos, dependendo "
+            "da complexidade da imagem e da disponibilidade do serviço."
+        )
+    else:
+        st.write("### Image Review with AI")
+        st.write("📍 **Upload an image!**: Upload an image and ask the AI anything about it!")
+        st.markdown(
+            '<p class="aviso">Note: AI supports uploads up to 20MB.</p>',
+            unsafe_allow_html=True
+        )
+
+        upload_label = "Choose an image..."
+        image_caption = "Uploaded Image"
+        initial_prompt = "Analyze this image"
+        initial_message = "Analyze this image:"
+        chat_placeholder = "Ask something about the image..."
+        user_label = "You"
+
+        st.caption(
+                    "💡 Analysis may take a few seconds depending on "
+                    "image complexity and service availability."
+                )
+
+    uploaded_file = st.file_uploader(
+        upload_label,
+        type=["jpg", "jpeg", "png"],
+        key="image_upload"
+    )
+
+    
     if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption='Imagem Enviada', use_column_width=True)
-        st.write("Analisando a imagem...")
+        image_bytes = uploaded_file.getvalue()
+        image_key = (uploaded_file.name, image_bytes)
 
-        if 'image_messages' not in st.session_state:
+        # Detecta quando uma nova imagem é enviada
+        if st.session_state.get("current_image_key") != image_key:
+            st.session_state.current_image_key = image_key
             st.session_state.image_messages = []
+            st.session_state.image_analysis_attempted = False
+            st.session_state.image_analysis_error = None
 
-        if len(st.session_state.image_messages) == 0:
-            st.session_state.image_messages.append(("Você", f"Analise esta imagem: {uploaded_file.name}"))
-            response = model.generate_content(["Analize esta imagem", image]) #Primeira pergunta padrão que será enviada, mas depois podemos fazer mais
-            response.resolve()
-            st.session_state.image_messages.append(("Gemini", response.text))
+        image = Image.open(BytesIO(image_bytes))
 
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for user, message in st.session_state.image_messages:
-                message_class = "user" if user == "Você" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.image(
+            image,
+            caption=image_caption,
+            use_container_width=True
+        )
 
-        user_input = st.chat_input("Pergunte algo sobre a imagem...", key="image_user_input")
-        if user_input:
-            st.session_state.image_messages.append(("Você", user_input))
-            response = model.generate_content([user_input, image])
-            response.resolve()
-            st.session_state.image_messages.append(("Gemini", response.text))
-            st.rerun()
+        # Primeira tentativa de análise
+        if not st.session_state.image_analysis_attempted:
+            st.session_state.image_analysis_attempted = True
 
- elif selected_language == "English":
-    st.write("### Image Review with AI")
-    st.write("📍 **Upload an image!**: Upload an image and ask the AI anything about it!")
-    st.markdown("<p class = aviso>Note: IA supports up to 20MB upload</p>", unsafe_allow_html=True)
+            loading_message = (
+                    "Aguarde um instante, estou analisando sua imagem..."
+                    if selected_language == "Português"
+                    else "Please wait, I'm analyzing your image..."
+                )
 
-    model = genai.GenerativeModel('gemini-1.5-flash') ## para analisar as imagens, precisamos de outra versão do gemini
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key = "image")
-    if uploaded_file is not None:
-        image = PIL.Image.open(uploaded_file)
-        st.image(image, caption='Uploaded Image', use_column_width=True)
-        st.write("Analyzing the image...")
+            with st.spinner(loading_message):
+                try:
+                    response = analyze_image(initial_prompt, image)
 
-        if 'image_messages' not in st.session_state:
-            st.session_state.image_messages = []
+                    st.session_state.image_messages.append(
+                        (user_label, f"{initial_message} {uploaded_file.name}")
+                    )
+                    st.session_state.image_messages.append(
+                        ("Gemini", response)
+                    )
 
-        if len(st.session_state.image_messages) == 0:
-            st.session_state.image_messages.append(("You", f"Analyze this image: {uploaded_file.name}"))
-            response = model.generate_content(["Analyze this image", image])
-            response.resolve()
-            st.session_state.image_messages.append(("Gemini", response.text))
+                except Exception as error:
+                    st.session_state.image_analysis_error = str(error)
 
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for user, message in st.session_state.image_messages:
-                message_class = "user" if user == "You" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        # Exibe erro e oferece nova tentativa
+        if st.session_state.image_analysis_error:
+            st.error(
+                f"Não foi possível analisar a imagem: "
+                f"{st.session_state.image_analysis_error}"
+            )
 
-        user_input = st.chat_input("Ask something about the image...", key="image_user_input")
+            retry_label = (
+                "🔄 Tentar novamente"
+                if selected_language == "Português"
+                else "🔄 Try again"
+            )
 
-        if user_input:
-            st.session_state.image_messages.append(("You", user_input))
-            response = model.generate_content([user_input, image])
-            response.resolve()
-            #response = chat.send_message(response1)
-            st.session_state.image_messages.append(("Gemini", response.text))
-            st.rerun()
+            if st.button(retry_label, key="retry_image_analysis"):
+                retry_loading_message = (
+                    "Tentando novamente, aguarde..."
+                    if selected_language == "Português"
+                     else "Trying again, please wait..."
+                    )
 
+                with st.spinner(retry_loading_message):
+                    try:
+                        response = analyze_image(initial_prompt, image)
+
+                        st.session_state.image_messages.append(
+                            (user_label, f"{initial_message} {uploaded_file.name}")
+                        )
+                        st.session_state.image_messages.append(
+                            ("Gemini", response)
+                        )
+
+                        st.session_state.image_analysis_error = None
+
+                    except Exception as error:
+                        st.session_state.image_analysis_error = str(error)
+
+                st.rerun()
+
+        # Só exibe o chat depois que a análise inicial funcionar
+        if st.session_state.image_messages:
+
+            chat_container = st.container()
+
+            with chat_container:
+                st.markdown(
+                    '<div class="chat-container">',
+                    unsafe_allow_html=True
+                )
+
+                for user, message in st.session_state.image_messages:
+                    message_class = "user" if user == user_label else "bot"
+
+                    st.markdown(
+                        f'<div class="message {message_class}">'
+                        f'<b>{user}:</b> {message}</div>',
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            user_input = st.chat_input(
+                chat_placeholder,
+                key="image_user_input"
+            )
+
+            if user_input:
+                chat_loading_message = (
+                "Analisando sua pergunta..."
+                  if selected_language == "Português"
+                    else "Analyzing your question..."
+                        )
+
+                with st.spinner(chat_loading_message):
+                    try:
+                        response = analyze_image(user_input, image)
+
+                        st.session_state.image_messages.append(
+                            (user_label, user_input)
+                        )
+                        st.session_state.image_messages.append(
+                            ("Gemini", response)
+                        )
+
+                        st.rerun()
+
+                    except Exception as error:
+                        st.error(f"Erro ao enviar mensagem: {error}")
 
 
 #Agora na aba3, teremos alguns pontos similares ao da aba2, porém agora iremos analisar os textos contidos em um PDF,
@@ -338,6 +461,17 @@ with aba3:
     st.write("📍 **Envie um arquivo PDF!**: Envie seu currículo, um livro, revista, e pergunte sobre ele para a IA, quer um resumo? um conselho? Teste agora!")
     st.markdown("<p class = aviso> Caso dê algum erro na leitura, tenha certeza que seu arquivo PDF esteja corretamente formatado. A IA irá ler o conteúdo do seu PDF, ignorando imagens.</p>", unsafe_allow_html=True);
     uploaded_file_pdf = st.file_uploader("Escolha um PDF...", type=["pdf"])
+
+    if selected_language == "Português":
+        st.caption(
+            "💡 A análise pode levar alguns segundos, "
+            "dependendo da complexidade da imagem e da disponibilidade do serviço."
+        )
+    else:
+        st.caption(
+            "💡 Analysis may take a few seconds depending on "
+            "image complexity and service availability."
+        )
     
     if uploaded_file_pdf is not None:
         # O gmeini precisa fazer leitura em bytes, segundo a própria documentação, então vamos transformar o arquivo PDF em bytes

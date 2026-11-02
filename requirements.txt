@@ -1,6 +1,6 @@
 streamlit
-google.generativeai
-load_dotenv
+google-genai>=2.0.0
+python-dotenv
 streamlit-lottie
 pymupdf
-pypdf2
+pillow
