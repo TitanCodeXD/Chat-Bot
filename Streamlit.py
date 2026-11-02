@@ -4,6 +4,7 @@ import streamlit as st
 from services.chat import create_chat, send_message
 from services.image import analyze_image
 from services.pdf import extract_pdf_text, analyze_pdf
+from services.audio import process_audio
 import requests
 from PIL import Image
 import google.generativeai as genai
@@ -138,17 +139,6 @@ def set_background_messages(color_message):
   
 ### Nessa próximas duas funções foi referenciado de um projeto similiar que também foi usado áudios com 
 #inteligência artificial, então bastou analisar e moldar conforme a necessidade
-# Função para processar o áudio enviado
-def process_audio(audio_file_path, user_prompt):
-        model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
-        audio_file = genai.upload_file(path=audio_file_path)
-        response = model.generate_content(
-            [
-                user_prompt,
-                audio_file
-            ]
-        )
-        return response.text
 
 # Função para salvar o arquivo de áudio temporariamente
 def save_uploaded_file(uploaded_file):
@@ -660,40 +650,127 @@ with aba3:
 
 # Nessa etapa de análise de áudios, foi necessário além de checar a documentação, consultar alguns projetos similares no github,
 #pois estava ocasionando alguns problemas. Por fim deu tudo certo. Algumas partes parecidas com as abas anteriores.
+
 with aba4:
-  if selected_language == "Português":
-    st.write("### Análise de Áudio");
-    st.write("📍 **Envie um áudio!**:  Envie um áudio e faça alguma pergunte sobre ele, quer um resumo de um aúdio de 10 minutos? Teste !")
-    st.markdown("<p class = aviso> O áudio deve conter falas, o bot irá principalmente analisar falas (que não contenham linguajar explícito/obscenidades!). Áudios que contenham barulhos/música, são prováveis a dar erro. </p>", unsafe_allow_html=True);
+    if "audio_result" not in st.session_state:
+        st.session_state.audio_result = None
 
-    user_prompt = st.text_input("Digite sua questão sobre o áudio:", placeholder="Que tal... 'Me resuma esse áudio'")
+    if "audio_error" not in st.session_state:
+        st.session_state.audio_error = None
 
-    audio_file = st.file_uploader("Envie seu arquivo", type=['wav', 'mp3'])
+    if selected_language == "Português":
+        st.write("### Análise de Áudio")
+        st.write(
+            "📍 **Envie um áudio!**: Envie um áudio e faça perguntas "
+            "sobre seu conteúdo. Quer um resumo de um áudio de 10 minutos? Experimente!"
+        )
+        st.markdown(
+            '<p class="aviso">O áudio deve conter falas para obter os melhores resultados. '
+            'Arquivos com apenas ruídos ou música podem não produzir uma análise adequada.</p>',
+            unsafe_allow_html=True
+        )
+
+        prompt_label = "Digite sua questão sobre o áudio:"
+        prompt_placeholder = "Ex.: Me resuma esse áudio."
+        upload_label = "Envie seu arquivo de áudio"
+        button_label = "Processar áudio"
+        loading_message = "Processando áudio..."
+        result_label = "Resposta:"
+        error_message = "Não foi possível processar o áudio:"
+
+    else:
+        st.write("### Audio Review")
+        st.write(
+            "📍 **Upload an audio file!**: Upload audio and ask questions "
+            "about its content. Want a summary of a 10-minute recording? Give it a try!"
+        )
+        st.markdown(
+            '<p class="aviso">Audio containing speech generally produces the best results. '
+            'Files containing only noise or music may not produce a useful analysis.</p>',
+            unsafe_allow_html=True
+        )
+
+        prompt_label = "Enter your question about the audio:"
+        prompt_placeholder = "E.g., Summarize this audio."
+        upload_label = "Upload your audio file"
+        button_label = "Process audio"
+        loading_message = "Processing audio..."
+        result_label = "Response:"
+        error_message = "Unable to process audio:"
+
+    st.caption(
+        "💡 O processamento pode levar alguns segundos, dependendo do tamanho do áudio e da disponibilidade do serviço."
+        if selected_language == "Português"
+        else "💡 Processing may take a few seconds depending on audio size and service availability."
+    )
+
+    user_prompt = st.text_input(
+        prompt_label,
+        placeholder=prompt_placeholder,
+        key="audio_prompt"
+    )
+
+    audio_file = st.file_uploader(
+        upload_label,
+        type=["wav", "mp3"],
+        key="audio_upload"
+    )
+
     if audio_file is not None:
-        audio_path = save_uploaded_file(audio_file)
-        st.audio(audio_path)
+        audio_bytes = audio_file.getvalue()
+        audio_key = (audio_file.name, audio_bytes)
 
-        if st.button('Processar!'):
-            with st.spinner('Processando...'):
-                processed_text = process_audio(audio_path, user_prompt)
-                st.text_area("Resposta: ", processed_text, height=300)
+        # Detecta quando um novo áudio é enviado
+        if st.session_state.get("current_audio_key") != audio_key:
+            st.session_state.current_audio_key = audio_key
+            st.session_state.audio_result = None
+            st.session_state.audio_error = None
 
-  elif selected_language == "English":
-    st.write("### Audio Review")
-    st.write("📍 **Send an audio!**: Send an audio and ask a question about it, want a summary of a 10-minute audio? Try it out!")
-    st.markdown("<p class = aviso> The audio must contain speech, the bot will mainly analyse speech (that doesn't contain explicit language/obscenities!). Audio that contains noise/music is likely to give an error. </p>", unsafe_allow_html=True);
+        mime_type = (
+            "audio/mpeg"
+            if audio_file.name.lower().endswith(".mp3")
+            else "audio/wav"
+        )
 
-    user_prompt = st.text_input("Enter your custom AI prompt:", placeholder="E.g., 'Please summarize the audio:'")
+        st.audio(audio_bytes, format=mime_type)
 
-    audio_file = st.file_uploader("Upload Audio File", type=['wav', 'mp3'])
-    if audio_file is not None:
-        audio_path = save_uploaded_file(audio_file)
-        st.audio(audio_path)
+        if st.button(button_label, key="process_audio_button"):
+            prompt = user_prompt.strip()
 
-        if st.button('Process Audio'):
-            with st.spinner('Processing...'):
-                processed_text = process_audio(audio_path, user_prompt)
-                st.text_area("Processed Output", processed_text, height=300)
+            if not prompt:
+                prompt = (
+                    "Analise este áudio, apresente sua transcrição e faça um resumo."
+                    if selected_language == "Português"
+                    else "Analyze this audio, provide its transcription and summarize it."
+                )
+
+            with st.spinner(loading_message):
+                try:
+                    response = process_audio(
+                        audio_bytes,
+                        mime_type,
+                        prompt
+                    )
+
+                    st.session_state.audio_result = response
+                    st.session_state.audio_error = None
+
+                except Exception as error:
+                    st.session_state.audio_error = str(error)
+                    st.session_state.audio_result = None
+
+        if st.session_state.audio_error:
+            st.error(
+                f"{error_message} {st.session_state.audio_error}"
+            )
+
+        if st.session_state.audio_result:
+            st.text_area(
+                result_label,
+                value=st.session_state.audio_result,
+                height=300,
+                key="audio_result_display"
+            )
 
 
 with aba5:
