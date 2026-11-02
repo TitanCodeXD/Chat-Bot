@@ -1,4 +1,3 @@
-
 from PIL import Image
 
 from config.gemini import client, MODEL_NAME

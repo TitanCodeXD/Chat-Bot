@@ -3,6 +3,7 @@ import streamlit as st
 #Services
 from services.chat import create_chat, send_message
 from services.image import analyze_image
+from services.pdf import extract_pdf_text, analyze_pdf
 import requests
 from PIL import Image
 import google.generativeai as genai
@@ -455,115 +456,206 @@ with aba2:
 
 #Agora na aba3, teremos alguns pontos similares ao da aba2, porém agora iremos analisar os textos contidos em um PDF,
 #não trabalharemos com imagens. Além disso, precisamos converter o pdf para bytes.
+
 with aba3:
-  if selected_language == "Português":
-    st.write("### Análise de PDFs com IA");
-    st.write("📍 **Envie um arquivo PDF!**: Envie seu currículo, um livro, revista, e pergunte sobre ele para a IA, quer um resumo? um conselho? Teste agora!")
-    st.markdown("<p class = aviso> Caso dê algum erro na leitura, tenha certeza que seu arquivo PDF esteja corretamente formatado. A IA irá ler o conteúdo do seu PDF, ignorando imagens.</p>", unsafe_allow_html=True);
-    uploaded_file_pdf = st.file_uploader("Escolha um PDF...", type=["pdf"])
+    if "pdf_messages" not in st.session_state:
+        st.session_state.pdf_messages = []
 
     if selected_language == "Português":
-        st.caption(
-            "💡 A análise pode levar alguns segundos, "
-            "dependendo da complexidade da imagem e da disponibilidade do serviço."
+        st.write("### Análise de PDFs com IA")
+        st.write(
+            "📍 **Envie um arquivo PDF!**: Envie seu currículo, "
+            "um livro ou uma revista e pergunte o que quiser sobre ele!"
         )
+        st.markdown(
+            '<p class="aviso">A IA analisará o texto do PDF, ignorando imagens. '
+            'Certifique-se de que o documento esteja corretamente formatado.</p>',
+            unsafe_allow_html=True
+        )
+
+        upload_label = "Escolha um PDF..."
+        initial_prompt = "Analise este PDF"
+        initial_message = "Analise este PDF:"
+        chat_placeholder = "Pergunte algo sobre o PDF..."
+        user_label = "Você"
+
+        loading_message = "Aguarde um instante, estou analisando seu PDF..."
+        chat_loading_message = "Analisando sua pergunta..."
+
     else:
-        st.caption(
-            "💡 Analysis may take a few seconds depending on "
-            "image complexity and service availability."
+        st.write("### PDF Analysis with AI")
+        st.write(
+            "📍 **Upload a PDF file!**: Send your resume, "
+            "a book or a magazine and ask anything about it!"
         )
-    
+        st.markdown(
+            '<p class="aviso">The AI will analyze the PDF text, ignoring images. '
+            'Make sure your document is correctly formatted.</p>',
+            unsafe_allow_html=True
+        )
+
+        upload_label = "Choose a PDF file..."
+        initial_prompt = "Analyze this PDF"
+        initial_message = "Analyze this PDF:"
+        chat_placeholder = "Ask something about the PDF..."
+        user_label = "You"
+
+        loading_message = "Please wait, I'm analyzing your PDF..."
+        chat_loading_message = "Analyzing your question..."
+
+    st.caption(
+        "💡 A análise pode levar alguns segundos, dependendo do tamanho do documento e da disponibilidade do serviço."
+        if selected_language == "Português"
+        else "💡 Analysis may take a few seconds depending on document size and service availability."
+    )
+
+    uploaded_file_pdf = st.file_uploader(
+        upload_label,
+        type=["pdf"],
+        key="pdf_upload"
+    )
+
     if uploaded_file_pdf is not None:
-        # O gmeini precisa fazer leitura em bytes, segundo a própria documentação, então vamos transformar o arquivo PDF em bytes
-        pdf_bytes = BytesIO(uploaded_file_pdf.read())
-        
-        leitor_pdf = PyPDF2.PdfReader(pdf_bytes)
+        pdf_bytes = uploaded_file_pdf.getvalue()
+        pdf_key = (uploaded_file_pdf.name, pdf_bytes)
 
-        num_paginas = len(leitor_pdf.pages)
-        texto_completo = ""
-
-        # Aqui vamos extrair o texto de cada página, ja que é assim que o gemini irá ler. Vamos só analisar texto, nada de imagens
-        for num_pagina in range(num_paginas):
-            pagina = leitor_pdf.pages[num_pagina]
-
-            texto_pagina = pagina.extract_text()
-            texto_completo += texto_pagina + "\n"
-
-        # O melhor modelo do gemini para a leitura de textos em pdf
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-
-        if 'pdf_messages' not in st.session_state:
+        # Detecta quando um novo PDF é enviado
+        if st.session_state.get("current_pdf_key") != pdf_key:
+            st.session_state.current_pdf_key = pdf_key
             st.session_state.pdf_messages = []
+            st.session_state.pdf_analysis_attempted = False
+            st.session_state.pdf_analysis_error = None
+            st.session_state.pdf_text = None
 
-        if len(st.session_state.pdf_messages) == 0:
-            st.session_state.pdf_messages.append(("Você", f"Analise este PDF: {uploaded_file_pdf.name}"))
-            response = model.generate_content([f"Analise este PDF", texto_completo])
-            response.resolve()
-            st.session_state.pdf_messages.append(("Gemini", response.text))
+        # Extrai o texto apenas uma vez por documento
+        if st.session_state.pdf_text is None:
+            try:
+                st.session_state.pdf_text = extract_pdf_text(pdf_bytes)
+            except Exception as error:
+                st.session_state.pdf_analysis_error = str(error)
 
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for user, message in st.session_state.pdf_messages:
-                message_class = "user" if user == "Você" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state.pdf_analysis_error:
+            st.error(
+                f"Não foi possível processar o PDF: "
+                f"{st.session_state.pdf_analysis_error}"
+            )
 
-        user_input = st.chat_input("Pergunte algo sobre o PDF...", key="pdf_user_input")
-        if user_input:
-            st.session_state.pdf_messages.append(("Você", user_input))
-            response = model.generate_content([user_input, texto_completo])
-            response.resolve()
-            st.session_state.pdf_messages.append(("Gemini", response.text))
-            st.rerun()
+            if st.button(
+                "Tentar novamente" if selected_language == "Português"
+                else "Try again",
+                key="retry_pdf_extraction"
+            ):
+                st.session_state.pdf_analysis_error = None
+                st.session_state.pdf_text = None
+                st.rerun()
 
-    #Agora replicamos, mas trocando o idioma
-  elif selected_language == "English":
-    st.write("### PDF's Review with an IA");
-    st.write("📍 **Send a PDF file!**: Send your resume/curriculum, a magazine, a book, ask about it to the IA, wants a summary? an advice? Try it now!")
-    st.markdown("<p class = aviso> If there is an error when reading PDF file, make sure your file is correctly formatted. The AI will read the content of your PDF, ignoring images. </p>", unsafe_allow_html=True);
-    uploaded_file_pdf = st.file_uploader("Choose a PDF File...", type=["pdf"])
-    
-    if uploaded_file_pdf is not None:
-        pdf_bytes = BytesIO(uploaded_file_pdf.read())
-        
-        leitor_pdf = PyPDF2.PdfReader(pdf_bytes)
+        # Análise inicial do documento
+        if (
+            st.session_state.pdf_text
+            and not st.session_state.pdf_analysis_attempted
+        ):
+            st.session_state.pdf_analysis_attempted = True
 
-        num_paginas = len(leitor_pdf.pages)
-        texto_completo = ""
+            with st.spinner(loading_message):
+                try:
+                    response = analyze_pdf(
+                        initial_prompt,
+                        st.session_state.pdf_text
+                    )
 
-        for num_pagina in range(num_paginas):
-            pagina = leitor_pdf.pages[num_pagina]
+                    st.session_state.pdf_messages.append(
+                        (user_label, f"{initial_message} {uploaded_file_pdf.name}")
+                    )
+                    st.session_state.pdf_messages.append(
+                        ("Gemini", response)
+                    )
 
-            texto_pagina = pagina.extract_text()
-            texto_completo += texto_pagina + "\n"
+                except Exception as error:
+                    st.session_state.pdf_analysis_error = str(error)
 
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        # Exibe erro e oferece nova tentativa
+        if st.session_state.pdf_analysis_error:
+            st.error(
+                f"Não foi possível analisar o PDF: "
+                f"{st.session_state.pdf_analysis_error}"
+            )
 
-        if 'pdf_messages' not in st.session_state:
-            st.session_state.pdf_messages = []
+            retry_label = (
+                "🔄 Tentar novamente"
+                if selected_language == "Português"
+                else "🔄 Try again"
+            )
 
-        if len(st.session_state.pdf_messages) == 0:
-            st.session_state.pdf_messages.append(("Você", f"Analise este PDF: {uploaded_file_pdf.name}"))
-            response = model.generate_content([f"Analise este PDF", texto_completo])
-            response.resolve()
-            st.session_state.pdf_messages.append(("Gemini", response.text))
+            if st.button(retry_label, key="retry_pdf_analysis"):
+                st.session_state.pdf_analysis_error = None
 
-        chat_container = st.container()
-        with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for user, message in st.session_state.pdf_messages:
-                message_class = "user" if user == "Você" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+                with st.spinner(loading_message):
+                    try:
+                        response = analyze_pdf(
+                            initial_prompt,
+                            st.session_state.pdf_text
+                        )
 
-        user_input = st.chat_input("Pergunte algo sobre o PDF...", key="pdf_user_input")
-        if user_input:
-            st.session_state.pdf_messages.append(("Você", user_input))
-            response = model.generate_content([user_input, texto_completo])
-            response.resolve()
-            st.session_state.pdf_messages.append(("Gemini", response.text))
-            st.rerun()
+                        st.session_state.pdf_messages.append(
+                            (user_label, f"{initial_message} {uploaded_file_pdf.name}")
+                        )
+                        st.session_state.pdf_messages.append(
+                            ("Gemini", response)
+                        )
+
+                    except Exception as error:
+                        st.session_state.pdf_analysis_error = str(error)
+
+                    else:
+                        st.session_state.pdf_analysis_error = None
+
+                st.rerun()
+
+        # Chat disponível após a análise inicial
+        if st.session_state.pdf_messages:
+            chat_container = st.container()
+
+            with chat_container:
+                st.markdown(
+                    '<div class="chat-container">',
+                    unsafe_allow_html=True
+                )
+
+                for user, message in st.session_state.pdf_messages:
+                    message_class = "user" if user == user_label else "bot"
+
+                    st.markdown(
+                        f'<div class="message {message_class}">'
+                        f'<b>{user}:</b> {message}</div>',
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            user_input = st.chat_input(
+                chat_placeholder,
+                key="pdf_user_input"
+            )
+
+            if user_input:
+                with st.spinner(chat_loading_message):
+                    try:
+                        response = analyze_pdf(
+                            user_input,
+                            st.session_state.pdf_text
+                        )
+
+                        st.session_state.pdf_messages.append(
+                            (user_label, user_input)
+                        )
+                        st.session_state.pdf_messages.append(
+                            ("Gemini", response)
+                        )
+
+                        st.rerun()
+
+                    except Exception as error:
+                        st.error(f"Erro ao enviar mensagem: {error}")
 
 
 # Nessa etapa de análise de áudios, foi necessário além de checar a documentação, consultar alguns projetos similares no github,
