@@ -33,10 +33,6 @@ body {
     margin-right: auto;
 }
 
-.stMarkdown {
-    display: flex;
-    flex-direction: column;
-}
 
 #erro {
     color: red;
@@ -73,6 +69,16 @@ body {
     justify-content: flex-end;
 }
 
+/* Título principal */
+h1 {
+    color: #252525;
+    font-weight: 700;
+}
+
+/* Tema escuro */
+[data-testid="stAppViewContainer"].dark-theme h1 {
+    color: #E6EDF3;
+}
 
 
 /*.chat-container {

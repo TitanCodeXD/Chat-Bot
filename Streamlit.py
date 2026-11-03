@@ -5,40 +5,15 @@ from services.chat import create_chat, send_message
 from services.image import analyze_image
 from services.pdf import extract_pdf_text, analyze_pdf
 from services.audio import process_audio
-import requests
 from PIL import Image
-import google.generativeai as genai
-import PIL.Image
-import pathlib
-import tqdm
-import os
-import time
 import json
-import fitz
-import tempfile
-import PyPDF2
 from io import BytesIO
 from streamlit_lottie import st_lottie #Import de arquivos lottie animados
-from dotenv import load_dotenv
+import html
 
 
 # Padrão da página como centralizado
 st.set_page_config(layout="centered")
-
-# Carregando arquivo .env (variáveis de ambiente) e pegando nossa KEY da API
-load_dotenv()
-
-
-################ Configuração antiga do Gemini removida. ####################
-################ A integração com o novo SDK será feita gradualmente. #######
-#API_KEY = os.getenv("API_KEY");
-#genai.configure(api_key = API_KEY);
-#model = genai.GenerativeModel('gemini-3.8-flash')
-#chat = client.chats.create(model=MODEL_NAME)
-
-messages = []
-image_messages = []
-pdf_messages = []
 
 ### Variáveis Globais de state
 if "selected_language" not in st.session_state:
@@ -66,14 +41,6 @@ def set_language(language):
     st.session_state["selected_language"] = language
     #st.rerun() apenas para testes
 
-# Função para atualizar o container
-def update_chat_container():
-    chat_message_html = f"""<div id="chat-area">{''.join([f'<div class="message {message_class}"><b>{user}:</b> {message}</div>' for user, message in messages])}</div>"""
-    # Exibe as mensagens no Streamlit
-    st.markdown(chat_message_html, unsafe_allow_html=True)
-
-        
-# Função para processar o envio de mensagem do chat
 
 # Função para processar o envio de mensagem do chat
 def process_chat_message(user_input):
@@ -85,14 +52,9 @@ def process_chat_message(user_input):
             )
 
             # Língua selecionada
-            selected_language = st.session_state["selected_language"]
+            st.session_state.messages.append(("user", user_input))
+            st.session_state.messages.append(("assistant", response))
 
-            pronome = "Você" if selected_language == "Português" else "You"
-
-            st.session_state.messages.append((pronome, user_input))
-            st.session_state.messages.append(("Gemini", response))
-
-            update_chat_container()
             st.rerun()
 
         except Exception as error:
@@ -118,10 +80,35 @@ def set_background(color):
     if color == "Branco":
         st.markdown('''<style> [data-testid="stSidebarContent"] { background-color: #D7D5CD; } [data-testid="stAppViewContainer"] { background-color: white;} 
                     [data-testid="stHeader"] { background-color: white;}  [data-testid="stSidebarCollapseButton"] { background-color: #D7D5CD;} [data-testid="stMainMenu"] { background-color: #D7D5CD;} 
-                    [data-testid="main-menu-list"] { background-color: #D7D5CD;} [data-testid="stImageCaption"] {color: black} p,li,ul,h3,h1,h2,button { color: black; }</style>''', unsafe_allow_html=True)
+                    [data-testid="main-menu-list"] { background-color: #D7D5CD;} [data-testid="stImageCaption"] {color: black} p,li,ul,h3,h1,h2,button { color: black; } [data-testid="stAppViewContainer"] h1 {
+    color: #222222 !important;
+}</style>''', unsafe_allow_html=True)
         
     elif color == "Padrão": 
-        st.markdown('<style></style>', unsafe_allow_html=True)
+        st.markdown("""
+                    <style>
+                        [data-testid="stAppViewContainer"] {
+                            background-color: #0E1117 !important;
+                        }
+        
+                        [data-testid="stHeader"] {
+                            background-color: #0E1117 !important;
+                        }
+        
+                        [data-testid="stSidebar"],
+                        [data-testid="stSidebarContent"] {
+                            background-color: #161B22 !important;
+                        }
+        
+                        [data-testid="stAppViewContainer"] h1,
+                        [data-testid="stAppViewContainer"] h2,
+                        [data-testid="stAppViewContainer"] h3,
+                        [data-testid="stAppViewContainer"] p,
+                        [data-testid="stAppViewContainer"] label {
+                            color: #E6EDF3 !important;
+                        }
+                    </style>
+                """, unsafe_allow_html=True)
 
 # Função para alterar a cor do background das mensagens, útil para acessibilidade
 def set_background_messages(color_message):
@@ -137,18 +124,6 @@ def set_background_messages(color_message):
     elif color_message == "Azul Claro e Cinza":
         st.markdown('<style> div.message.user { background-color: #3797f0; color: white} div.message.bot{ background-color: gray;} </style>', unsafe_allow_html=True)
   
-### Nessa próximas duas funções foi referenciado de um projeto similiar que também foi usado áudios com 
-#inteligência artificial, então bastou analisar e moldar conforme a necessidade
-
-# Função para salvar o arquivo de áudio temporariamente
-def save_uploaded_file(uploaded_file):
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.' + uploaded_file.name.split('.')[-1]) as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                return tmp_file.name
-        except Exception as e:
-            st.error(f"Error: {e}")
-            return None
 ######## Sidebars - Filtros
 
 #Linguagem
@@ -215,48 +190,82 @@ if "messages" not in st.session_state:
 if "gemini_chat" not in st.session_state:
     st.session_state.gemini_chat = create_chat()
 
+
+
 with aba1:
     if selected_language == "Português":
         st.write("### Chat Bot:")
-        st.write(" 📍 **Pergunte o que quiser!** Diga um oi, pergunte qual a origem da roupa branca no reveillon, por que o céu é azul?, deixe a criatividade rolar solta (não use o bot para consultas de pesquisas, vá atrás para confiar as informações, sempre bom ter uma fonte confiável);")
-        st.markdown('<p class = aviso>Aviso: Dependendo da pergunta, o bot pode acrescentar muito texto e não enviar a resposta. Seja pontual. Se o bot der algum erro, peça para ele resumir a resposta, deve funcionar.</p>', unsafe_allow_html=True);
+        st.write("📍 **Pergunte o que quiser!** Diga um oi, pergunte qual a origem da roupa branca no réveillon, por que o céu é azul? Deixe a criatividade rolar solta (não use o bot para consultas de pesquisas, vá atrás para conferir as informações; sempre é bom ter uma fonte confiável).")
+
+        st.markdown(
+            '<p class="aviso">Aviso: Dependendo da pergunta, o bot pode acrescentar muito texto e não enviar a resposta. Seja pontual. Se o bot der algum erro, peça para ele resumir a resposta, deve funcionar.</p>',
+            unsafe_allow_html=True
+        )
 
         chat_container = st.container()
 
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+
             for user, message in st.session_state.messages:
-                message_class = "user" if user == "Você" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
+                message_class = "user" if user == "user" else "bot"
+                display_name = "Você" if user == "user" else "Gemini"
+                safe_message = html.escape(str(message))
+
+                st.markdown(
+                    f'<div class="message {message_class}"><b>{display_name}:</b> {safe_message}</div>',
+                    unsafe_allow_html=True
+                )
+
             st.markdown('</div>', unsafe_allow_html=True)
 
-        user_input = st.chat_input("Diga alguma coisa... ", key = "user_input")
-        if user_input:
-            with st.spinner('Processando...'):
-                process_chat_message(user_input);
+        user_input = st.chat_input("Diga alguma coisa...", key="user_input")
 
-        st.markdown("<div id='chat-area' style='overflow-y: auto; max-height: 500px;'></div>", unsafe_allow_html=True)
+        if user_input:
+            with st.spinner("Processando..."):
+                process_chat_message(user_input)
+
+        st.markdown(
+            "<div id='chat-area' style='overflow-y: auto; max-height: 500px;'></div>",
+            unsafe_allow_html=True
+        )
+
     elif selected_language == "English":
         st.write("### Chat Bot:")
-        st.write(" 📍 **Ask anything you want!** Say hello, ask where the white clothes come from on New Year's Eve, why the sky is blue, let your creativity run wild (don't use the bot for research queries, go back and trust the information, it's always good to have a reliable source).")
-        st.markdown('<p class = aviso>Note: Depending on the question, the bot may add a lot of text and not send the answer. Be punctual. If the bot gives an error, ask it to summarise the answer, it should works.</p>', unsafe_allow_html=True);
+        st.write("📍 **Ask anything you want!** Say hello, ask where white clothes on New Year's Eve come from, why the sky is blue, and let your creativity run wild.")
+
+        st.markdown(
+            '<p class="aviso">Note: Depending on the question, the bot may add a lot of text and fail to send the response. Be concise. If the bot gives an error, ask it to summarize the response.</p>',
+            unsafe_allow_html=True
+        )
 
         chat_container = st.container()
 
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+
             for user, message in st.session_state.messages:
-                message_class = "user" if user == "You" else "bot"
-                st.markdown(f'<div class="message {message_class}"><b>{user}:</b> {message}</div>', unsafe_allow_html=True)
+                message_class = "user" if user == "user" else "bot"
+                display_name = "You" if user == "user" else "Gemini"
+                safe_message = html.escape(str(message))
+
+                st.markdown(
+                    f'<div class="message {message_class}"><b>{display_name}:</b> {safe_message}</div>',
+                    unsafe_allow_html=True
+                )
+
             st.markdown('</div>', unsafe_allow_html=True)
 
-        user_input = st.chat_input("Write something... ", key = "user_input")
+        user_input = st.chat_input("Write something...", key="user_input")
 
         if user_input:
-            with st.spinner('Processing...'):
-                process_chat_message(user_input);
-        
-        st.markdown("<div id='chat-area' style='overflow-y: auto; max-height: 500px;'></div>", unsafe_allow_html=True)
+            with st.spinner("Processing..."):
+                process_chat_message(user_input)
+
+        st.markdown(
+            "<div id='chat-area' style='overflow-y: auto; max-height: 500px;'></div>",
+            unsafe_allow_html=True
+        )
 
 
 #Agora para a aba2, foi fundamental acessar a documentação do gemini, aqui precisamos alterar o modelo da IA, 
